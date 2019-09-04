@@ -144,6 +144,10 @@ static ssize_t sysfs_read(struct device *dev, char *buf,
 	return len;
 }
 
+/*****************************************************************************
+ * Make DTS Specific
+ * START
+ ****************************************************************************/
 static ssize_t temp_dts_entry_store(struct device *dev, struct device_attribute *attr,
 			 const char *buf, size_t count)
 {
@@ -164,6 +168,11 @@ static struct attribute *template_attrs[] = {
 	&dev_attr_temp_dts_entry.attr,
 	NULL,
 };
+
+/*****************************************************************************
+ * Make DTS Specific
+ * END
+ ****************************************************************************/
 
 static const struct attribute_group template_attrs_group = {
 	.name = "ip_registers",
