@@ -47,20 +47,22 @@
  *     IP register offsets
  * ----------------------------
  */
-#define TEMPLATE_ISR_OFFSET 0x00000000
-#define TEMPLATE_STATUS_OFFSET 0x00000004
-#define TEMPLATE_READ_BYTES_OFFSET 0x00000008
-#define TEMPLATE_WRITE_OFFSET 0x0000000C
-#define TEMPLATE_READ_OFFSET 0x00000010
-#define TEMPLATE_DTS_ENTRY_OFFSET 0x00000014
+#define TEMPLATE_ISR_OFFSET        0x00000000 /* irq status register */
+#define TEMPLATE_IER_OFFSET        0x00000004 /* irq enable register */
+#define TEMPLATE_STATUS_OFFSET     0x00000008
+#define TEMPLATE_READ_BYTES_OFFSET 0x0000000C
+#define TEMPLATE_WRITE_OFFSET      0x00000010
+#define TEMPLATE_READ_OFFSET       0x00000014
+#define TEMPLATE_DTS_ENTRY_OFFSET  0x00000018
 
 /* ----------------------------
  * IP Register Mask
  * ----------------------------
  */
 #define TEMPLATE_RESET_MASK 0xdeadbeef
-#define READ_READY_MASK 1
-#define WRITE_READY_MASK 2
+#define READ_READY_MASK     1
+#define WRITE_READY_MASK    2
+#define IRQ_EVENTA_MASK     4
 
 /* ----------------------------
  *           globals
@@ -69,8 +71,8 @@
 static struct class *template_driver_driver_class; /* char device class */
 static int read_timeout = 1000; /* ms to wait before read() times out */
 static int write_timeout = 1000; /* ms to wait before write() times out */
-static DECLARE_WAIT_QUEUE_HEAD(axis_read_wait);
-static DECLARE_WAIT_QUEUE_HEAD(axis_write_wait);
+static DECLARE_WAIT_QUEUE_HEAD(template_read_wait);
+static DECLARE_WAIT_QUEUE_HEAD(template_write_wait);
 
 /* ----------------------------
  * module command-line arguments
@@ -186,8 +188,8 @@ static unsigned int template_poll(struct file *file, poll_table *wait)
 	unsigned int tdfv;
 	mask = 0;
 
-	poll_wait(file, &axis_read_wait, wait);
-	poll_wait(file, &axis_write_wait, wait);
+	poll_wait(file, &template_read_wait, wait);
+	poll_wait(file, &template_write_wait, wait);
 
 	rdfo = ioread32(template->base_addr + TEMPLATE_STATUS_OFFSET) & READ_READY_MASK;
 	mask |= POLLIN | POLLRDNORM;
@@ -197,6 +199,79 @@ static unsigned int template_poll(struct file *file, poll_table *wait)
 
 	return mask;
 }
+
+static long template_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+    long rc;
+    size_t size;
+    void *__user arg_ptr;
+    uint32_t temp_reg;
+	struct template_driver *template = (struct template_driver *)f->private_data;
+
+    // Coerce the arguement as a userspace pointer
+    arg_ptr = (void __user *)arg;
+
+    // Verify that this IOCTL is intended for our device, and is in range
+    if (_IOC_TYPE(cmd) != TEMPLATE_IOCTL_MAGIC) {
+        axidma_err("IOCTL command magic number does not match.\n");
+        return -ENOTTY;
+    } else if (_IOC_NR(cmd) >= TEMPLATE_NUM_IOCTLS) {
+        axidma_err("IOCTL command is out of range for this device.\n");
+        return -ENOTTY;
+    }
+
+    // Get the axidma device from the file
+    dev = file->private_data;
+
+    // Perform the specified command
+    switch (cmd) {
+        case TEMPLATE_GET_STATUS_REG:
+            *arg_ptr = ioread32(template->base_addr + TEMPLATE_STATUS_OFFSET);
+            rc = 0;
+            break;
+
+        case TEMPLATE_RESET_IP:
+            reset_ip_core(template);
+            break;
+
+        case TEMPLATE_WRITE_REG:
+            struct temp_struct *a = arg_ptr;
+			iowrite32(a->value, a->reg);
+            break;
+
+        default:
+            return -ENOTTY;
+    }
+    
+    return rc;
+
+}
+#ifdef TEMPLATE_INTERRUPT_ENABLE
+static irqreturn_t template_driver_irq(int irq, void *dw)
+{
+	struct template_driver *template = (struct template_driver *)dw;
+    unsigned int pending_interrupts;
+
+    do {
+        pending_interrupts = ioread32(template->base_addr +
+                          TEMPLATE_IER_OFFSET) &
+                          ioread32(template->base_addr
+                          + XLLF_ISR_OFFSET);
+        if (pending_interrupts & IRQ_EVENTA_MASK) {
+            /* do something ... lets say read is ready! wakeup poll */
+
+            /* wake the reader process if it is waiting */
+            wake_up(&fifo->read_queue);
+            wake_up_interruptible(&template_read_wait);
+
+            /* clear interrupt */
+            iowrite32(IRQ_EVENTA_MASK & IRQ_ALL_MASK,
+                  template->base_addr + TEMPLATE_ISR_OFFSET);
+        }
+    } while (pending_interrupts);
+    return IRQ_HANDLED;
+}
+#endif
 
 /* reads a single packet from the template as dictated by the tlast signal */
 static ssize_t template_driver_read(struct file *f, char __user *buf,
@@ -231,7 +306,7 @@ static ssize_t template_driver_read(struct file *f, char __user *buf,
 			(read_timeout >= 0) ? msecs_to_jiffies(read_timeout) :
 				MAX_SCHEDULE_TIMEOUT);
 		spin_unlock_irq(&template->read_queue_lock);
-                wake_up_interruptible(&axis_read_wait);
+                wake_up_interruptible(&template_read_wait);
 
 		if (ret == 0) {
 			/* timeout occurred */
@@ -320,7 +395,7 @@ static ssize_t template_driver_write(struct file *f, const char __user *buf,
 			(write_timeout >= 0) ? msecs_to_jiffies(write_timeout) :
 				MAX_SCHEDULE_TIMEOUT);
 		spin_unlock_irq(&template->write_queue_lock);
-                wake_up_interruptible(&axis_write_wait);
+                wake_up_interruptible(&template_write_wait);
 
 		if (ret == 0) {
 			/* timeout occurred */
