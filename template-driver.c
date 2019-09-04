@@ -236,7 +236,7 @@ static long template_ioctl(struct file *file, unsigned int cmd, unsigned long ar
 
         case TEMPLATE_WRITE_REG:
             struct temp_struct *a = arg_ptr;
-			iowrite32(a->value, a->reg);
+			iowrite32(a->value, template->base_addr + a->regOff);
             break;
 
         default:
