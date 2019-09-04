@@ -12,7 +12,6 @@
  *           includes
  * ----------------------------
  */
-
 #include <linux/kernel.h>
 #include <linux/wait.h>
 #include <linux/spinlock_types.h>
@@ -30,10 +29,11 @@
 #include <linux/types.h>
 #include <linux/uaccess.h>
 #include <linux/jiffies.h>
-
 #include <linux/of_address.h>
 #include <linux/of_device.h>
 #include <linux/of_platform.h>
+
+#include "template-ioctls.h"
 
 /* ----------------------------
  *       driver parameters
@@ -59,7 +59,7 @@
  * IP Register Mask
  * ----------------------------
  */
-#define TEMPLATE_RESET_MASK 0xdeadbeef
+#define TEMPLATE_RESET_WORD 0xdeadbeef
 #define READ_READY_MASK     1
 #define WRITE_READY_MASK    2
 #define IRQ_EVENTA_MASK     4
@@ -93,7 +93,7 @@ struct template_driver {
 	struct resource *mem; /* physical memory */
 	void __iomem *base_addr; /* kernel space memory */
 
-	unsigned int temp_dts_entry; /* max words in the receive template */
+	unsigned int temp_dts_entry; /* example dts entry */
 
 	wait_queue_head_t read_queue; /* wait queue for asynchronos read */
 	spinlock_t read_queue_lock; /* lock for reading waitqueue */
@@ -177,7 +177,7 @@ static const struct attribute_group template_attrs_group = {
 
 static void reset_ip_core(struct template_driver *template)
 {
-	iowrite32(TEMPLATE_RESET_MASK, template->base_addr + TEMPLATE_STATUS_OFFSET);
+	iowrite32(TEMPLATE_RESET_WORD, template->base_addr + TEMPLATE_STATUS_OFFSET);
 }
 
 static unsigned int template_poll(struct file *file, poll_table *wait)
@@ -200,33 +200,38 @@ static unsigned int template_poll(struct file *file, poll_table *wait)
 	return mask;
 }
 
-static long template_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+static DEFINE_MUTEX(ioctl_lock);
+static long template_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 {
     long rc;
-    size_t size;
     void *__user arg_ptr;
     uint32_t temp_reg;
+    struct temp_struct a;
 	struct template_driver *template = (struct template_driver *)f->private_data;
+
+    if (mutex_lock_interruptible(&ioctl_lock))
+        return -EINTR;
 
     // Coerce the arguement as a userspace pointer
     arg_ptr = (void __user *)arg;
 
     // Verify that this IOCTL is intended for our device, and is in range
     if (_IOC_TYPE(cmd) != TEMPLATE_IOCTL_MAGIC) {
-        axidma_err("IOCTL command magic number does not match.\n");
+        dev_err(template->dt_device, "IOCTL command magic number does not match.\n");
         return -ENOTTY;
     } else if (_IOC_NR(cmd) >= TEMPLATE_NUM_IOCTLS) {
-        axidma_err("IOCTL command is out of range for this device.\n");
+        dev_err(template->dt_device, "IOCTL command is out of range for this device.\n");
         return -ENOTTY;
     }
-
-    // Get the axidma device from the file
-    dev = file->private_data;
 
     // Perform the specified command
     switch (cmd) {
         case TEMPLATE_GET_STATUS_REG:
-            *arg_ptr = ioread32(template->base_addr + TEMPLATE_STATUS_OFFSET);
+            temp_reg = ioread32(template->base_addr + TEMPLATE_STATUS_OFFSET);
+            if (copy_to_user(arg_ptr, &temp_reg, 4)) {
+                dev_err(template->dt_device, "unable to copy status reg to userspace\n");
+                return -EFAULT;
+            }
             rc = 0;
             break;
 
@@ -235,17 +240,21 @@ static long template_ioctl(struct file *file, unsigned int cmd, unsigned long ar
             break;
 
         case TEMPLATE_WRITE_REG:
-            struct temp_struct *a = arg_ptr;
-			iowrite32(a->value, template->base_addr + a->regOff);
+            if (copy_from_user(&a, arg_ptr, sizeof(a)) != 0) {
+                dev_err(template->dt_device, "unable to copy temp_struct from userspace\n");
+                return -EFAULT;
+            }
+			iowrite32(a.value, template->base_addr + a.regOff);
             break;
 
         default:
             return -ENOTTY;
     }
     
+    mutex_unlock(&ioctl_lock);
     return rc;
-
 }
+
 #ifdef TEMPLATE_INTERRUPT_ENABLE
 static irqreturn_t template_irq(int irq, void *dw)
 {
@@ -256,7 +265,7 @@ static irqreturn_t template_irq(int irq, void *dw)
         pending_interrupts = ioread32(template->base_addr +
                           TEMPLATE_IER_OFFSET) &
                           ioread32(template->base_addr
-                          + XLLF_ISR_OFFSET);
+                          + TEMPLATE_ISR_OFFSET);
         if (pending_interrupts & IRQ_EVENTA_MASK) {
             /* do something ... lets say read is ready! wakeup poll */
 
@@ -301,7 +310,7 @@ static ssize_t template_read(struct file *f, char __user *buf,
 		spin_lock_irq(&template->read_queue_lock);
 		ret = wait_event_interruptible_lock_irq_timeout(
 			template->read_queue,
-			ioread32(template->base_addr + XLLF_RDFO_OFFSET),
+			(ioread32(template->base_addr + TEMPLATE_STATUS_OFFSET) & READ_READY_MASK),
 			template->read_queue_lock,
 			(read_timeout >= 0) ? msecs_to_jiffies(read_timeout) :
 				MAX_SCHEDULE_TIMEOUT);
@@ -322,7 +331,7 @@ static ssize_t template_read(struct file *f, char __user *buf,
 		}
 	}
 
-	bytes_available = ioread32(template->base_addr + TEMPLATE_BYTES_AVAILABLE_OFFSET);
+	bytes_available = ioread32(template->base_addr + TEMPLATE_READ_BYTES_OFFSET);
 	if (!bytes_available) {
 		dev_err(template->dt_device, "received a packet of length 0 - template core will be reset\n");
 		reset_ip_core(template);
@@ -352,6 +361,18 @@ static ssize_t template_read(struct file *f, char __user *buf,
 		copied += copy;
 		words_available -= copy;
 	}
+
+    leftover = bytes_available % sizeof(u32);
+    if (leftover) {
+        tmp_buf[0] = ioread32(template->base_addr +
+                              TEMPLATE_READ_OFFSET);
+
+        if (copy_to_user(buf + copied * sizeof(u32), tmp_buf,
+                     leftover)) {
+            reset_ip_core(template);
+            return -EFAULT;
+        }
+    }
 
 	return bytes_available;
 }
@@ -389,8 +410,7 @@ static ssize_t template_write(struct file *f, const char __user *buf,
 		spin_lock_irq(&template->write_queue_lock);
 		ret = wait_event_interruptible_lock_irq_timeout(
 			template->write_queue,
-			ioread32(template->base_addr + XLLF_TDFV_OFFSET)
-				>= words_to_write,
+			(ioread32(template->base_addr + TEMPLATE_STATUS_OFFSET) & WRITE_READY_MASK),
 			template->write_queue_lock,
 			(write_timeout >= 0) ? msecs_to_jiffies(write_timeout) :
 				MAX_SCHEDULE_TIMEOUT);
@@ -445,9 +465,9 @@ static ssize_t template_write(struct file *f, const char __user *buf,
         }
 
         /* write packet size to template */
-	copiedBytes = (template->has_tkeep && !!leftover) ? (copied*sizeof(u32)+leftover) : (copied*sizeof(u32));
+	copiedBytes = (!!leftover) ? (copied*sizeof(u32)+leftover) : (copied*sizeof(u32));
 
-        return (ssize_t)copiedBytes;
+    return (ssize_t)copiedBytes;
 }
 
 static int template_open(struct inode *inod, struct file *f)
@@ -458,22 +478,12 @@ static int template_open(struct inode *inod, struct file *f)
 
 	if (((f->f_flags & O_ACCMODE) == O_WRONLY) ||
 	    ((f->f_flags & O_ACCMODE) == O_RDWR)) {
-		if (template->has_tx_template) {
-			template->write_flags = f->f_flags;
-		} else {
-			dev_err(template->dt_device, "tried to open device for write but the transmit template is disabled\n");
-			return -EPERM;
-		}
+            template->write_flags = f->f_flags;
 	}
 
 	if (((f->f_flags & O_ACCMODE) == O_RDONLY) ||
 	    ((f->f_flags & O_ACCMODE) == O_RDWR)) {
-		if (template->has_rx_template) {
-			template->read_flags = f->f_flags;
-		} else {
-			dev_err(template->dt_device, "tried to open device for read but the receive template is disabled\n");
-			return -EPERM;
-		}
+            template->read_flags = f->f_flags;
 	}
 
 	return 0;
@@ -490,6 +500,7 @@ static const struct file_operations fops = {
 	.open = template_open,
 	.release = template_close,
 	.read = template_read,
+    .unlocked_ioctl = template_ioctl,
 	.write = template_write,
 	.poll = template_poll
 };
@@ -514,7 +525,9 @@ static int get_dts_property(struct template_driver *template,
 
 static int template_probe(struct platform_device *pdev)
 {
+#ifdef TEMPLATE_IRQ_ENABLED
 	struct resource *r_irq; /* interrupt resources */
+#endif
 	struct resource *r_mem; /* IO mem resources */
 	struct device *dev = &pdev->dev; /* OS device (from device tree) */
 	struct template_driver *template = NULL;
@@ -613,7 +626,6 @@ static int template_probe(struct platform_device *pdev)
 	 *    init device interrupts
 	 * ----------------------------
 	 */
-
 #if TEMPLATE_IRQ_ENABLED
 	/* get IRQ resource */
 	r_irq = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
