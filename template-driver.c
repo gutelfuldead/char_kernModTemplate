@@ -604,7 +604,7 @@ static int template_probe(struct platform_device *pdev)
 	 * ----------------------------
 	 */
 	/* retrieve device tree properties */
-	rc = get_dts_property(template, "xlnx,template-dts-entry",
+	rc = get_dts_property(template, "usr,template-dts-entry",
 			      &temp_dts_entry);
 	if (rc)
 		goto err_unmap;
@@ -731,7 +731,7 @@ static int template_remove(struct platform_device *pdev)
 }
 
 static const struct of_device_id template_of_match[] = {
-	{ .compatible = "xlnx,template-core", },
+	{ .compatible = "usr,template-core", },
 	{},
 };
 MODULE_DEVICE_TABLE(of, template_of_match);
