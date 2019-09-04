@@ -68,7 +68,7 @@
  *           globals
  * ----------------------------
  */
-static struct class *template_driver_driver_class; /* char device class */
+static struct class *template_class; /* char device class */
 static int read_timeout = 1000; /* ms to wait before read() times out */
 static int write_timeout = 1000; /* ms to wait before write() times out */
 static DECLARE_WAIT_QUEUE_HEAD(template_read_wait);
@@ -160,14 +160,14 @@ static DEVICE_ATTR_RW(temp_dts_entry);
 /* static DEVICE_ATTR_WO(temp_dts_entry); */
 /* static DEVICE_ATTR_RO(temp_dts_entry); */
 
-static struct attribute *template_driver_attrs[] = {
+static struct attribute *template_attrs[] = {
 	&dev_attr_temp_dts_entry.attr,
 	NULL,
 };
 
-static const struct attribute_group template_driver_attrs_group = {
+static const struct attribute_group template_attrs_group = {
 	.name = "ip_registers",
-	.attrs = template_driver_attrs,
+	.attrs = template_attrs,
 };
 
 /* ----------------------------
@@ -247,7 +247,7 @@ static long template_ioctl(struct file *file, unsigned int cmd, unsigned long ar
 
 }
 #ifdef TEMPLATE_INTERRUPT_ENABLE
-static irqreturn_t template_driver_irq(int irq, void *dw)
+static irqreturn_t template_irq(int irq, void *dw)
 {
 	struct template_driver *template = (struct template_driver *)dw;
     unsigned int pending_interrupts;
@@ -274,7 +274,7 @@ static irqreturn_t template_driver_irq(int irq, void *dw)
 #endif
 
 /* reads a single packet from the template as dictated by the tlast signal */
-static ssize_t template_driver_read(struct file *f, char __user *buf,
+static ssize_t template_read(struct file *f, char __user *buf,
 			      size_t len, loff_t *off)
 {
 	struct template_driver *template = (struct template_driver *)f->private_data;
@@ -356,7 +356,7 @@ static ssize_t template_driver_read(struct file *f, char __user *buf,
 	return bytes_available;
 }
 
-static ssize_t template_driver_write(struct file *f, const char __user *buf,
+static ssize_t template_write(struct file *f, const char __user *buf,
 			       size_t len, loff_t *off)
 {
 	struct template_driver *template = (struct template_driver *)f->private_data;
@@ -450,7 +450,7 @@ static ssize_t template_driver_write(struct file *f, const char __user *buf,
         return (ssize_t)copiedBytes;
 }
 
-static int template_driver_open(struct inode *inod, struct file *f)
+static int template_open(struct inode *inod, struct file *f)
 {
 	struct template_driver *template = (struct template_driver *)container_of(inod->i_cdev,
 					struct template_driver, char_device);
@@ -479,7 +479,7 @@ static int template_driver_open(struct inode *inod, struct file *f)
 	return 0;
 }
 
-static int template_driver_close(struct inode *inod, struct file *f)
+static int template_close(struct inode *inod, struct file *f)
 {
 	f->private_data = NULL;
 	return 0;
@@ -487,10 +487,10 @@ static int template_driver_close(struct inode *inod, struct file *f)
 
 static const struct file_operations fops = {
 	.owner = THIS_MODULE,
-	.open = template_driver_open,
-	.release = template_driver_close,
-	.read = template_driver_read,
-	.write = template_driver_write,
+	.open = template_open,
+	.release = template_close,
+	.read = template_read,
+	.write = template_write,
 	.poll = template_poll
 };
 
@@ -512,7 +512,7 @@ static int get_dts_property(struct template_driver *template,
 	return 0;
 }
 
-static int template_driver_probe(struct platform_device *pdev)
+static int template_probe(struct platform_device *pdev)
 {
 	struct resource *r_irq; /* interrupt resources */
 	struct resource *r_mem; /* IO mem resources */
@@ -626,7 +626,7 @@ static int template_driver_probe(struct platform_device *pdev)
 
 	/* request IRQ */
 	template->irq = r_irq->start;
-	rc = request_irq(template->irq, &template_driver_irq, 0, DRIVER_NAME, template);
+	rc = request_irq(template->irq, &template_irq, 0, DRIVER_NAME, template);
 	if (rc) {
 		dev_err(template->dt_device, "couldn't allocate interrupt %i\n",
 			template->irq);
@@ -647,7 +647,7 @@ static int template_driver_probe(struct platform_device *pdev)
 		MAJOR(template->devt), MINOR(template->devt));
 
 	/* create driver file */
-	template->device = device_create(template_driver_driver_class, NULL, template->devt,
+	template->device = device_create(template_class, NULL, template->devt,
 				     NULL, device_name);
 	if (IS_ERR(template->device)) {
 		dev_err(template->dt_device,
@@ -666,7 +666,7 @@ static int template_driver_probe(struct platform_device *pdev)
 	}
 
 	/* create sysfs entries */
-	rc = sysfs_create_group(&template->device->kobj, &template_driver_attrs_group);
+	rc = sysfs_create_group(&template->device->kobj, &template_attrs_group);
 	if (rc < 0) {
 		dev_err(template->dt_device, "couldn't register sysfs group\n");
 		goto err_cdev;
@@ -683,7 +683,7 @@ static int template_driver_probe(struct platform_device *pdev)
 err_cdev:
 	cdev_del(&template->char_device);
 err_dev:
-	device_destroy(template_driver_driver_class, template->devt);
+	device_destroy(template_class, template->devt);
 err_chrdev_region:
 	unregister_chrdev_region(template->devt, 1);
 err_irq:
@@ -699,15 +699,15 @@ err_initial:
 	return rc;
 }
 
-static int template_driver_remove(struct platform_device *pdev)
+static int template_remove(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct template_driver *template = dev_get_drvdata(dev);
 
-	sysfs_remove_group(&template->device->kobj, &template_driver_attrs_group);
+	sysfs_remove_group(&template->device->kobj, &template_attrs_group);
 	cdev_del(&template->char_device);
 	dev_set_drvdata(template->device, NULL);
-	device_destroy(template_driver_driver_class, template->devt);
+	device_destroy(template_class, template->devt);
 	unregister_chrdev_region(template->devt, 1);
 #ifdef TEMPLATE_IRQ_ENABLED
 	free_irq(template->irq, template);
@@ -718,39 +718,39 @@ static int template_driver_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static const struct of_device_id template_driver_of_match[] = {
+static const struct of_device_id template_of_match[] = {
 	{ .compatible = "xlnx,template-core", },
 	{},
 };
-MODULE_DEVICE_TABLE(of, template_driver_of_match);
+MODULE_DEVICE_TABLE(of, template_of_match);
 
-static struct platform_driver template_driver_driver = {
+static struct platform_driver template_driver = {
 	.driver = {
 		.name = DRIVER_NAME,
 		.owner = THIS_MODULE,
-		.of_match_table	= template_driver_of_match,
+		.of_match_table	= template_of_match,
 	},
-	.probe		= template_driver_probe,
-	.remove		= template_driver_remove,
+	.probe		= template_probe,
+	.remove		= template_remove,
 };
 
-static int __init template_driver_init(void)
+static int __init template_init(void)
 {
 	pr_info(DRIVER_NAME " driver loaded with parameters read_timeout = %i, write_timeout = %i\n",
 		read_timeout, write_timeout);
-	template_driver_driver_class = class_create(THIS_MODULE, DRIVER_NAME);
-	if (IS_ERR(template_driver_driver_class))
-		return PTR_ERR(template_driver_driver_class);
-	return platform_driver_register(&template_driver_driver);
+	template_class = class_create(THIS_MODULE, DRIVER_NAME);
+	if (IS_ERR(template_class))
+		return PTR_ERR(template_class);
+	return platform_driver_register(&template_driver);
 }
-module_init(template_driver_init);
+module_init(template_init);
 
-static void __exit template_driver_exit(void)
+static void __exit template_exit(void)
 {
-	platform_driver_unregister(&template_driver_driver);
-	class_destroy(template_driver_driver_class);
+	platform_driver_unregister(&template_driver);
+	class_destroy(template_class);
 }
-module_exit(template_driver_exit);
+module_exit(template_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Jason Gutel jason.gutel@gmail.com>");
