@@ -247,16 +247,16 @@ static long template_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
             rc = 0;
             break;
 
-        case TEMPLATE_RESET_IP:
-            reset_ip_core(template);
-            break;
-
         case TEMPLATE_WRITE_REG_STATUS:
             if (copy_from_user(&temp_reg, arg_ptr, sizeof(temp_reg)) != 0) {
                 dev_err(template->dt_device, "unable to copy temp_struct from userspace\n");
                 return -EFAULT;
             }
 			iowrite32(temp_reg, template->base_addr + TEMPLATE_STATUS_OFFSET);
+            break;
+
+        case TEMPLATE_RESET_IP:
+            reset_ip_core(template);
             break;
 
         default:
