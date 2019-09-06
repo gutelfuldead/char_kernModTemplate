@@ -64,6 +64,25 @@
 #define WRITE_READY_MASK    2
 #define IRQ_EVENTA_MASK     4
 
+
+/* ----------------------------
+ * Bit Ops
+ * ----------------------------
+ */
+#define set_bit(bitNumber, dataValue) ((dataValue) |= (0x1 << (bitNumber)))
+#define clear_bit(bitNumber, dataValue) ((dataValue) &= ~(0x1 << (bitNumber)))
+#define flip_bit(bitNumber, dataValue)  ((dataValue) ^= (0x1 << (bitNumber)))
+#define to_bool(x) (!(!(x)))
+#define is_set(bitNumber, dataValue) to_bool((0x1 << (bitNumber)) & (dataValue))
+#define is_clear(bitNumber, dataValue) (!is_set((bitNumber), (dataValue)))
+#define assn_bit(bitNumber, dataValue, bitValue) ((bitValue) ? set_bit(bitNumber, dataValue) : clear_bit(bitNumber, dataValue))
+#define read_mask(reg, mask, bitOffset, out) (out = (reg >> bitOffset) & mask)
+#define set_mask(reg, reg_mask, bit_offset, write_val, out) do {\
+    out = reg; \
+    out &= ~(reg_mask << bit_offset); \
+    out |= ((write_val & reg_mask) << bit_offset); \
+    } while (0);
+
 /* ----------------------------
  *           globals
  * ----------------------------
@@ -114,31 +133,39 @@ struct template_driver {
  */
 
 static ssize_t sysfs_write(struct device *dev, const char *buf,
-			   size_t count, unsigned int addr_offset)
+			   size_t count, unsigned int addr_offset,
+               uint32_t mask, uint32_t bitOff)
 {
 	struct template_driver *template = dev_get_drvdata(dev);
 	unsigned long tmp;
+    unsigned int outVal;
+    unsigned int read_val;
 	int rc;
 
 	rc = kstrtoul(buf, 0, &tmp);
 	if (rc < 0)
 		return rc;
 
-	iowrite32(tmp, template->base_addr + addr_offset);
+    /* read modify write */
+	read_val = ioread32(template->base_addr + addr_offset);
+    set_mask(read_val, mask, bitOff, tmp, outVal);
+	iowrite32(outVal, template->base_addr + addr_offset);
 
 	return count;
 }
 
 static ssize_t sysfs_read(struct device *dev, char *buf,
-			  unsigned int addr_offset)
+			  unsigned int addr_offset, uint32_t mask, uint32_t bitOff)
 {
 	struct template_driver *template = dev_get_drvdata(dev);
 	unsigned int read_val;
 	unsigned int len;
+    unsigned int outVal;
 	char tmp[32];
 
 	read_val = ioread32(template->base_addr + addr_offset);
-	len =  snprintf(tmp, sizeof(tmp), "0x%x\n", read_val);
+    read_mask(read_val, mask, bitOff, outVal);
+	len =  snprintf(tmp, sizeof(tmp), "0x%x\n", outVal);
 	memcpy(buf, tmp, len);
 
 	return len;
@@ -151,13 +178,13 @@ static ssize_t sysfs_read(struct device *dev, char *buf,
 static ssize_t temp_dts_entry_store(struct device *dev, struct device_attribute *attr,
 			 const char *buf, size_t count)
 {
-	return sysfs_write(dev, buf, count, TEMPLATE_DTS_ENTRY_OFFSET);
+	return sysfs_write(dev, buf, count, TEMPLATE_DTS_ENTRY_OFFSET, 0xffffffff, 0);
 }
 
 static ssize_t temp_dts_entry_show(struct device *dev,
 			struct device_attribute *attr, char *buf)
 {
-	return sysfs_read(dev, buf, TEMPLATE_DTS_ENTRY_OFFSET);
+	return sysfs_read(dev, buf, TEMPLATE_DTS_ENTRY_OFFSET, 0xffffffff, 0);
 }
 
 static DEVICE_ATTR_RW(temp_dts_entry);
