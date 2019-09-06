@@ -541,7 +541,7 @@ static int template_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev; /* OS device (from device tree) */
 	struct template_driver *template = NULL;
 
-	char device_name[32];
+	char device_name[64];
 
 	int rc = 0; /* error return value */
 
