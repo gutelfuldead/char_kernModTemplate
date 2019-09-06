@@ -33,7 +33,7 @@
 #include <linux/of_device.h>
 #include <linux/of_platform.h>
 
-#include "template-ioctls.h"
+#include "template-driver.h"
 
 /* ----------------------------
  *       driver parameters
@@ -42,28 +42,6 @@
 #define DRIVER_NAME "TEMPLATE_DRIVER"
 #define READ_BUF_SIZE 128U /* read buffer length in words */
 #define WRITE_BUF_SIZE 128U /* write buffer length in words */
-
-/* ----------------------------
- *     IP register offsets
- * ----------------------------
- */
-#define TEMPLATE_ISR_OFFSET        0x00000000 /* irq status register */
-#define TEMPLATE_IER_OFFSET        0x00000004 /* irq enable register */
-#define TEMPLATE_STATUS_OFFSET     0x00000008
-#define TEMPLATE_READ_BYTES_OFFSET 0x0000000C
-#define TEMPLATE_WRITE_OFFSET      0x00000010
-#define TEMPLATE_READ_OFFSET       0x00000014
-#define TEMPLATE_DTS_ENTRY_OFFSET  0x00000018
-
-/* ----------------------------
- * IP Register Mask
- * ----------------------------
- */
-#define TEMPLATE_RESET_WORD 0xdeadbeef
-#define READ_READY_MASK     1
-#define WRITE_READY_MASK    2
-#define IRQ_EVENTA_MASK     4
-
 
 /* ----------------------------
  * Bit Ops
@@ -112,7 +90,7 @@ struct template_driver {
 	struct resource *mem; /* physical memory */
 	void __iomem *base_addr; /* kernel space memory */
 
-	unsigned int temp_dts_entry; /* example dts entry */
+	unsigned int template_dts_entry; /* example dts entry */
 
 	wait_queue_head_t read_queue; /* wait queue for asynchronos read */
 	spinlock_t read_queue_lock; /* lock for reading waitqueue */
@@ -172,33 +150,31 @@ static ssize_t sysfs_read(struct device *dev, char *buf,
 }
 
 /*****************************************************************************
- * Make DTS Specific
- * START
+ * MODIFY START
  ****************************************************************************/
-static ssize_t temp_dts_entry_store(struct device *dev, struct device_attribute *attr,
+static ssize_t template_dts_entry_store(struct device *dev, struct device_attribute *attr,
 			 const char *buf, size_t count)
 {
 	return sysfs_write(dev, buf, count, TEMPLATE_DTS_ENTRY_OFFSET, 0xffffffff, 0);
 }
 
-static ssize_t temp_dts_entry_show(struct device *dev,
+static ssize_t template_dts_entry_show(struct device *dev,
 			struct device_attribute *attr, char *buf)
 {
 	return sysfs_read(dev, buf, TEMPLATE_DTS_ENTRY_OFFSET, 0xffffffff, 0);
 }
 
-static DEVICE_ATTR_RW(temp_dts_entry);
-/* static DEVICE_ATTR_WO(temp_dts_entry); */
-/* static DEVICE_ATTR_RO(temp_dts_entry); */
+static DEVICE_ATTR_RW(template_dts_entry);
+/* static DEVICE_ATTR_WO(template_dts_entry); */
+/* static DEVICE_ATTR_RO(template_dts_entry); */
 
 static struct attribute *template_attrs[] = {
-	&dev_attr_temp_dts_entry.attr,
+	&dev_attr_template_dts_entry.attr,
 	NULL,
 };
 
 /*****************************************************************************
- * Make DTS Specific
- * END
+ * MODIFY END
  ****************************************************************************/
 
 static const struct attribute_group template_attrs_group = {
@@ -227,10 +203,10 @@ static unsigned int template_poll(struct file *file, poll_table *wait)
 	poll_wait(file, &template_read_wait, wait);
 	poll_wait(file, &template_write_wait, wait);
 
-	rdfo = ioread32(template->base_addr + TEMPLATE_STATUS_OFFSET) & READ_READY_MASK;
+	rdfo = ioread32(template->base_addr + TEMPLATE_STATUS_OFFSET) & TEMPLATE_READ_READY_MASK;
 	mask |= POLLIN | POLLRDNORM;
 
-	tdfv = ioread32(template->base_addr + TEMPLATE_STATUS_OFFSET) & WRITE_READY_MASK;
+	tdfv = ioread32(template->base_addr + TEMPLATE_STATUS_OFFSET) & TEMPLATE_WRITE_READY_MASK;
 	mask |= POLLOUT;
 
 	return mask;
@@ -242,7 +218,6 @@ static long template_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
     long rc;
     void *__user arg_ptr;
     uint32_t temp_reg;
-    struct temp_struct a;
 	struct template_driver *template = (struct template_driver *)f->private_data;
 
     if (mutex_lock_interruptible(&ioctl_lock))
@@ -250,6 +225,7 @@ static long template_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 
     // Coerce the arguement as a userspace pointer
     arg_ptr = (void __user *)arg;
+    temp_reg = 0;
 
     // Verify that this IOCTL is intended for our device, and is in range
     if (_IOC_TYPE(cmd) != TEMPLATE_IOCTL_MAGIC) {
@@ -262,7 +238,7 @@ static long template_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 
     // Perform the specified command
     switch (cmd) {
-        case TEMPLATE_GET_STATUS_REG:
+        case TEMPLATE_READ_REG_STATUS:
             temp_reg = ioread32(template->base_addr + TEMPLATE_STATUS_OFFSET);
             if (copy_to_user(arg_ptr, &temp_reg, 4)) {
                 dev_err(template->dt_device, "unable to copy status reg to userspace\n");
@@ -275,12 +251,12 @@ static long template_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
             reset_ip_core(template);
             break;
 
-        case TEMPLATE_WRITE_REG:
-            if (copy_from_user(&a, arg_ptr, sizeof(a)) != 0) {
+        case TEMPLATE_WRITE_REG_STATUS:
+            if (copy_from_user(&temp_reg, arg_ptr, sizeof(temp_reg)) != 0) {
                 dev_err(template->dt_device, "unable to copy temp_struct from userspace\n");
                 return -EFAULT;
             }
-			iowrite32(a.value, template->base_addr + a.regOff);
+			iowrite32(temp_reg, template->base_addr + TEMPLATE_STATUS_OFFSET);
             break;
 
         default:
@@ -302,7 +278,7 @@ static irqreturn_t template_irq(int irq, void *dw)
                           TEMPLATE_IER_OFFSET) &
                           ioread32(template->base_addr
                           + TEMPLATE_ISR_OFFSET);
-        if (pending_interrupts & IRQ_EVENTA_MASK) {
+        if (pending_interrupts & TEMPLATE_IRQ_EVENTA_MASK) {
             /* do something ... lets say read is ready! wakeup poll */
 
             /* wake the reader process if it is waiting */
@@ -310,7 +286,7 @@ static irqreturn_t template_irq(int irq, void *dw)
             wake_up_interruptible(&template_read_wait);
 
             /* clear interrupt */
-            iowrite32(IRQ_EVENTA_MASK & IRQ_ALL_MASK,
+            iowrite32(TEMPLATE_IRQ_EVENTA_MASK & IRQ_ALL_MASK,
                   template->base_addr + TEMPLATE_ISR_OFFSET);
         }
     } while (pending_interrupts);
@@ -336,7 +312,7 @@ static ssize_t template_read(struct file *f, char __user *buf,
 		/* opened in non-blocking mode
 		 * return if there are no packets available
 		 */
-		if (!(ioread32(template->base_addr + TEMPLATE_STATUS_OFFSET) & READ_READY_MASK))
+		if (!(ioread32(template->base_addr + TEMPLATE_STATUS_OFFSET) & TEMPLATE_READ_READY_MASK))
 			return -EAGAIN;
 	} else {
 		/* opened in blocking mode
@@ -346,7 +322,7 @@ static ssize_t template_read(struct file *f, char __user *buf,
 		spin_lock_irq(&template->read_queue_lock);
 		ret = wait_event_interruptible_lock_irq_timeout(
 			template->read_queue,
-			(ioread32(template->base_addr + TEMPLATE_STATUS_OFFSET) & READ_READY_MASK),
+			(ioread32(template->base_addr + TEMPLATE_STATUS_OFFSET) & TEMPLATE_READ_READY_MASK),
 			template->read_queue_lock,
 			(read_timeout >= 0) ? msecs_to_jiffies(read_timeout) :
 				MAX_SCHEDULE_TIMEOUT);
@@ -434,7 +410,7 @@ static ssize_t template_write(struct file *f, const char __user *buf,
 		 * return if there is not enough room available in the template
 		 */
 		if (words_to_write > (ioread32(template->base_addr +
-					      TEMPLATE_STATUS_OFFSET) & WRITE_READY_MASK)) {
+					      TEMPLATE_STATUS_OFFSET) & TEMPLATE_WRITE_READY_MASK)) {
 			return -EAGAIN;
 		}
 	} else {
@@ -446,7 +422,7 @@ static ssize_t template_write(struct file *f, const char __user *buf,
 		spin_lock_irq(&template->write_queue_lock);
 		ret = wait_event_interruptible_lock_irq_timeout(
 			template->write_queue,
-			(ioread32(template->base_addr + TEMPLATE_STATUS_OFFSET) & WRITE_READY_MASK),
+			(ioread32(template->base_addr + TEMPLATE_STATUS_OFFSET) & TEMPLATE_WRITE_READY_MASK),
 			template->write_queue_lock,
 			(write_timeout >= 0) ? msecs_to_jiffies(write_timeout) :
 				MAX_SCHEDULE_TIMEOUT);
@@ -573,7 +549,7 @@ static int template_probe(struct platform_device *pdev)
 	int rc = 0; /* error return value */
 
 	/* IP properties from device tree */
-	unsigned int temp_dts_entry;
+	unsigned int temp;
 
 	/* ----------------------------
 	 *     init wrapper device
@@ -639,22 +615,28 @@ static int template_probe(struct platform_device *pdev)
 	 *          init IP
 	 * ----------------------------
 	 */
+    /*****************************************************************************
+     * MODIFY START
+     ****************************************************************************/
 	/* retrieve device tree properties */
 	rc = get_dts_property(template, "usr,template-dts-entry",
-			      &temp_dts_entry);
+			      &temp);
 	if (rc)
 		goto err_unmap;
 
 	/* check validity of device tree properties */
-	if (temp_dts_entry > 64) { /* some error condition */
+	if (temp > 64) { /* some error condition */
 		dev_err(template->dt_device,
-			"temp_dts_entry=[%u] unsupported\n",
-			temp_dts_entry);
+			"template-dts-entry=[%u] unsupported\n",
+			temp);
 		rc = -EIO;
 		goto err_unmap;
 	}
-	template->temp_dts_entry = temp_dts_entry;
+	template->template_dts_entry = temp;
 
+    /*****************************************************************************
+     * MODIFY END
+     ****************************************************************************/
 	reset_ip_core(template);
 
 
@@ -725,7 +707,7 @@ static int template_probe(struct platform_device *pdev)
 		 MAJOR(template->devt), MINOR(template->devt));
 
 	/* initialize any start-up registers */
-	iowrite32(template->temp_dts_entry, template->base_addr + TEMPLATE_DTS_ENTRY_OFFSET);
+	iowrite32(template->template_dts_entry, template->base_addr + TEMPLATE_DTS_ENTRY_OFFSET);
 	return 0;
 
 err_cdev:
