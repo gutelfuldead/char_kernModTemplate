@@ -8,18 +8,32 @@
 #include "poll.h"
 #include "template-driver.h"
 
+#define DRIVER_NAME "/dev/templateDriver0"
+
 static int fd;
 static int reset_core(void);
 static int read_status_reg(void);
 static int write_status_reg(uint32_t val);
 
-int main(void)
+int main(int argc, char *argv[])
 {
     int rc;
+    char *device_file;
 
-    fd = open("/dev/template", O_RDWR|O_EXCL);
+    if (argc == 1) {
+        device_file = DRIVER_NAME;
+        printf("Using default : %s\n",DRIVER_NAME);
+    } else if (argc == 2) {
+        device_file = argv[1];
+        printf("Using : %s\n",device_file);
+    } else {
+        printf("Usage : %s %s\n",argv[0], DRIVER_NAME);
+    }
+
+    fd = open(device_file, O_RDWR|O_EXCL);
     if (fd < 0) {
-        perror("Error opening /dev/template");
+        printf("Usage : %s %s\n",argv[0], DRIVER_NAME);
+        perror("open");
         return -1;
     }
 

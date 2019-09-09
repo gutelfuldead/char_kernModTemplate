@@ -39,7 +39,7 @@
  *       driver parameters
  * ----------------------------
  */
-#define DRIVER_NAME "TEMPLATE_DRIVER"
+#define DRIVER_NAME "templateDriver"
 #define READ_BUF_SIZE 128U /* read buffer length in words */
 #define WRITE_BUF_SIZE 128U /* write buffer length in words */
 
@@ -605,12 +605,6 @@ static int template_probe(struct platform_device *pdev)
 	}
 	dev_dbg(template->dt_device, "remapped memory to 0x%p\n", template->base_addr);
 
-	/* create unique device name */
-	snprintf(device_name, sizeof(device_name), "%s_%pa",
-		 DRIVER_NAME, &template->mem->start);
-
-	dev_dbg(template->dt_device, "device name [%s]\n", device_name);
-
 	/* ----------------------------
 	 *          init IP
 	 * ----------------------------
@@ -675,6 +669,12 @@ static int template_probe(struct platform_device *pdev)
 		goto err_irq;
 	dev_dbg(template->dt_device, "allocated device number major %i minor %i\n",
 		MAJOR(template->devt), MINOR(template->devt));
+
+	/* create unique device name */
+	snprintf(device_name, sizeof(device_name), "%s%d",
+		 DRIVER_NAME, MINOR(template->devt));
+
+	dev_dbg(template->dt_device, "device name [%s]\n", device_name);
 
 	/* create driver file */
 	template->device = device_create(template_class, NULL, template->devt,
