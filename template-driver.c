@@ -277,7 +277,7 @@ static long template_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
             break;
 
         case TEMPLATE_WRITE_REG_STATUS:
-            if (copy_from_user(&temp_reg, arg_ptr, sizeof(temp_reg)) != 0) {
+            if (copy_from_user(&temp_reg, arg_ptr, sizeof(temp_reg))) {
                 dev_err(template->dt_device, "unable to copy temp_struct from userspace\n");
                 return -EFAULT;
             }
