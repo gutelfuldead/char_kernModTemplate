@@ -1,9 +1,10 @@
-obj-m += template-driver.o
+obj-m := template-driver.o
 
 all:
-		make -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules
-		gcc template-test.c -o template-test
+	$(MAKE) -C $(KDIR) SUBDIRS=`pwd` modules
 
 clean:
-		make -C /lib/modules/$(shell uname -r)/build M=$(PWD) clean
-		rm -f template-test
+	$(MAKE) -C $(KDIR) SUBDIRS=`pwd` clean
+
+modules_install:
+	$(MAKE) -C $(KDIR) SUBDIRS=`pwd` modules_install
