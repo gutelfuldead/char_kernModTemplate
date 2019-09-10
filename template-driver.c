@@ -99,11 +99,18 @@ struct template_driver {
 	unsigned int write_flags; /* write file flags */
 	unsigned int read_flags; /* read file flags */
 
+    uint32_t fpga_addr;
 	struct device *dt_device; /* device created from the device tree */
 	struct device *device; /* device associated with char_device */
 	dev_t devt; /* our char device number */
 	struct cdev char_device; /* our char device */
 };
+
+/* ----------------------------
+ *   static function protos 
+ * ----------------------------
+ */
+static void reset_ip_core(struct template_driver *template);
 
 /* ----------------------------
  *         sysfs entries
@@ -149,6 +156,28 @@ static ssize_t sysfs_read(struct device *dev, char *buf,
 	return len;
 }
 
+static ssize_t fpga_addr_show(struct device *dev,
+			struct device_attribute *attr, char *buf)
+{
+	struct template_driver *template = dev_get_drvdata(dev);
+    char tmp[32];
+    unsigned int len;
+
+    len = snprintf(tmp, sizeof(tmp),"0x%x\n", template->fpga_addr);
+    memcpy(buf, tmp, len);
+    return len;
+}
+static DEVICE_ATTR_RO(fpga_addr);
+
+static ssize_t reset_store(struct device *dev, struct device_attribute *attr,
+			 const char *buf, size_t count)
+{
+	struct template_driver *template = dev_get_drvdata(dev);
+    reset_ip_core(template);
+    return 0;
+}
+static DEVICE_ATTR_WO(reset);
+
 /*****************************************************************************
  * MODIFY START
  ****************************************************************************/
@@ -165,10 +194,10 @@ static ssize_t template_dts_entry_show(struct device *dev,
 }
 
 static DEVICE_ATTR_RW(template_dts_entry);
-/* static DEVICE_ATTR_WO(template_dts_entry); */
-/* static DEVICE_ATTR_RO(template_dts_entry); */
 
 static struct attribute *template_attrs[] = {
+	&dev_attr_fpga_addr.attr,
+	&dev_attr_reset.attr,
 	&dev_attr_template_dts_entry.attr,
 	NULL,
 };
@@ -253,6 +282,15 @@ static long template_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
                 return -EFAULT;
             }
 			iowrite32(temp_reg, template->base_addr + TEMPLATE_STATUS_OFFSET);
+            break;
+
+        case TEMPLATE_GET_FPGA_ADDR:
+            temp_reg = template->fpga_addr;
+            if (copy_to_user(arg_ptr, &temp_reg, 4)) {
+                dev_err(template->dt_device, "unable to copy status reg to userspace\n");
+                return -EFAULT;
+            }
+            rc = 0;
             break;
 
         case TEMPLATE_RESET_IP:
@@ -595,6 +633,7 @@ static int template_probe(struct platform_device *pdev)
 	}
 	dev_dbg(template->dt_device, "got memory location [0x%pa - 0x%pa]\n",
 		&template->mem->start, &template->mem->end);
+    template->fpga_addr = template->mem->start;
 
 	/* map physical memory to kernel virtual address space */
 	template->base_addr = ioremap(template->mem->start, resource_size(template->mem));
