@@ -111,6 +111,20 @@ struct template_driver {
  * ----------------------------
  */
 static void reset_ip_core(struct template_driver *template);
+static void readModifyWrite(struct template_driver *template, uint32_t regOff, uint32_t value, uint32_t mask, uint32_t bit);
+
+static void readModifyWrite(struct template_driver *template, uint32_t regOff, uint32_t value, uint32_t mask, uint32_t bit)
+{
+    unsigned int readVal;
+    unsigned int outVal;
+
+    readVal = 0;
+    outVal  = 0;
+
+	readVal = ioread32(template->base_addr + regOff);
+    smi_set_mask(readVal, mask, bit, value, outVal);
+	iowrite32(outVal, template->base_addr + regOff);
+}
 
 /* ----------------------------
  *         sysfs entries
@@ -123,18 +137,13 @@ static ssize_t sysfs_write(struct device *dev, const char *buf,
 {
 	struct template_driver *template = dev_get_drvdata(dev);
 	unsigned long tmp;
-    unsigned int outVal;
-    unsigned int read_val;
 	int rc;
 
 	rc = kstrtoul(buf, 0, &tmp);
 	if (rc < 0)
 		return rc;
 
-    /* read modify write */
-	read_val = ioread32(template->base_addr + addr_offset);
-    set_mask(read_val, mask, bitOff, tmp, outVal);
-	iowrite32(outVal, template->base_addr + addr_offset);
+    readModifyWrite(template, addr_offset, tmp, mask, bitOff);
 
 	return count;
 }
@@ -269,7 +278,7 @@ static long template_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
     switch (cmd) {
         case TEMPLATE_READ_REG_STATUS:
             temp_reg = ioread32(template->base_addr + TEMPLATE_STATUS_OFFSET);
-            if (copy_to_user(arg_ptr, &temp_reg, 4)) {
+            if (copy_to_user(arg_ptr, &temp_reg, sizeof(temp_reg))) {
                 dev_err(template->dt_device, "unable to copy status reg to userspace\n");
                 return -EFAULT;
             }
@@ -286,7 +295,7 @@ static long template_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 
         case TEMPLATE_GET_FPGA_ADDR:
             temp_reg = template->fpga_addr;
-            if (copy_to_user(arg_ptr, &temp_reg, 4)) {
+            if (copy_to_user(arg_ptr, &temp_reg, sizeof(temp_reg))) {
                 dev_err(template->dt_device, "unable to copy status reg to userspace\n");
                 return -EFAULT;
             }
@@ -295,6 +304,25 @@ static long template_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 
         case TEMPLATE_RESET_IP:
             reset_ip_core(template);
+            break;
+
+        case TEMPLATE_GET_DTS_VAL0:
+            temp_reg = ioread32(template->base_addr + TEMPLATE_DTS_ENTRY_OFFSET);
+            smi_read_mask(temp_reg, TEMPLATE_DTS_VAL0_MASK, TEMPLATE_DTS_VAL0_BIT, temp_reg_out);
+            if (copy_to_user(arg_ptr, &temp_reg_out, sizeof(temp_reg_out))) {
+                dev_err(template->dt_device, "unable to copy status reg to userspace\n");
+                return -EFAULT;
+            }
+            rc = 0;
+            break;
+
+        case TEMPLATE_SET_DTS_VAL0:
+            if (copy_from_user(&temp_reg, arg_ptr, sizeof(temp_reg))) {
+                dev_err(template->dt_device, "unable to copy status reg to userspace\n");
+                return -EFAULT;
+            }
+            readModifyWrite(template, TEMPLATE_DTS_ENTRY_OFFSET, temp_reg, TEMPLATE_DTS_VAL0_MASK, TEMPLATE_DTS_VAL0_BIT);
+            rc = 0;
             break;
 
         default:
