@@ -710,8 +710,8 @@ static int template_probe(struct platform_device *pdev)
 		MAJOR(template->devt), MINOR(template->devt));
 
 	/* create unique device name */
-	snprintf(device_name, sizeof(device_name), "%s%d",
-		 DRIVER_NAME, MINOR(template->devt));
+	snprintf(device_name, sizeof(device_name), "%s_%pa",
+		 DRIVER_NAME, &template->mem->start);
 
 	dev_dbg(template->dt_device, "device name [%s]\n", device_name);
 

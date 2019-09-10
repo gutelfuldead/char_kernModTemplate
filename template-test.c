@@ -8,7 +8,7 @@
 #include "poll.h"
 #include "template-driver.h"
 
-#define DRIVER_NAME "/dev/templateDriver0"
+#define DRIVER_NAME "/dev/templateDriver_0x43c00000"
 
 static int fd;
 static int reset_core(void);

@@ -10,7 +10,7 @@ This driver allows controlling of the ip core through,
 
 The driver will be mounted as ::
 
-        /dev/templateDriver<minor number>
+        /dev/templateDriver_0x<fpga mmap address>
 
 Control through /sys/device/virtual
 ===================================
@@ -19,7 +19,7 @@ User can read and write registers and bit fields through the virtual sysfs
 directory. For example ::
 
         $ pwd
-        /sys/devices/virtual/templateDriver/templateDriver0/ip_registers
+        /sys/devices/virtual/templateDriver/templateDriver_0x43c00000/ip_registers
         $ ls -la
         total 0
         drwxr-xr-x    2 root     root             0 Jan  1 00:14 .
