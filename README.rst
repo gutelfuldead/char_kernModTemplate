@@ -2,6 +2,42 @@
 Character Driver /dev Kernel Module Example 
 ===========================================
 
+This driver allows controlling of the ip core through,
+
+1. devicetree
+2. /sys/device/virtual
+3. ioctls
+
+The driver will be mounted as ::
+
+        /dev/templateDriver<minor number>
+
+Control through /sys/device/virtual
+===================================
+
+User can read and write registers and bit fields through the virtual sysfs
+directory. For example ::
+
+        $ pwd
+        /sys/devices/virtual/templateDriver/templateDriver0/ip_registers
+        $ ls -la
+        total 0
+        drwxr-xr-x    2 root     root             0 Jan  1 00:14 .
+        drwxr-xr-x    4 root     root             0 Jan  1 00:00 ..
+        -r--r--r--    1 root     root          4096 Jan  1 00:14 fpga_addr
+        --w-------    1 root     root          4096 Jan  1 00:14 reset
+        -rw-r--r--    1 root     root          4096 Jan  1 00:14 template_dts_entry
+        $ cat fpga_addr
+        0x43c00000
+        $ echo 1 > reset
+
+ioctl commands
+==============
+
+All ioctl commands can be viewed in ``template-driver.h``. Example code for
+using the ioctls can be seen in ``template-test.c``.
+
+
 Device Tree Doc
 ===============
 
