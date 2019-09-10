@@ -37,7 +37,7 @@ ioctl commands
 ==============
 
 All ioctl commands can be viewed in ``template-driver.h``. Example code for
-using the ioctls can be seen in ``template-test.c``.
+using the ioctls can be seen in ``apps/template-test.c``.
 
 
 Device Tree Doc
