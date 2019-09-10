@@ -7,6 +7,8 @@ This driver allows controlling of the ip core through,
 1. devicetree
 2. /sys/device/virtual
 3. ioctls
+4. read/write
+5. poll
 
 The driver will be mounted as ::
 
