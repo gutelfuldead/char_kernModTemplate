@@ -104,27 +104,32 @@ static int reset_core(void)
 
 static int read_status_reg(void)
 {
-    uint32_t sreg;
     int rc;
-    /* get status reg */
-    rc = ioctl(fd, TEMPLATE_READ_REG_STATUS, &sreg);
+    struct template_kern_regInfo regInfo;
+
+    regInfo.regNo=0;
+    rc = ioctl(fd, TEMPLATE_READ_REG, &regInfo);
     if (rc) {
         perror("ioctl");
         return -1;
     }
-    printf("Status Reg : 0x%08x\n",sreg);
+    printf("Read Reg: 0x%08x = 0x%08x\n",regIfo.regNo, regInfo.regVal);
     return 0;
 }
 
 static int write_status_reg(uint32_t val)
 {
     int rc;
-    /* write to status reg */
-    rc = ioctl(fd, TEMPLATE_WRITE_REG_STATUS, &val);
+    struct template_kern_regInfo regInfo;
+
+    regInfo.regNo=0;
+    regInfo.regVal=val;
+    rc = ioctl(fd, TEMPLATE_WRITE_REG, &regInfo);
     if (rc) {
         perror("ioctl");
         return -1;
     }
+    printf("Write Reg: 0x%08x = 0x%08x\n",regIfo.regNo, regInfo.regVal);
     return 0;
 }
 

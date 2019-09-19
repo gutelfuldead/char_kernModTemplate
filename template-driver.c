@@ -66,19 +66,6 @@
  * ----------------------------
  */
 static struct class *template_class; /* char device class */
-static int read_timeout = 1000; /* ms to wait before read() times out */
-static int write_timeout = 1000; /* ms to wait before write() times out */
-static DECLARE_WAIT_QUEUE_HEAD(template_read_wait);
-static DECLARE_WAIT_QUEUE_HEAD(template_write_wait);
-
-/* ----------------------------
- * module command-line arguments
- * ----------------------------
- */
-module_param(read_timeout, int, 0444);
-MODULE_PARM_DESC(read_timeout, "ms to wait before blocking read() timing out; set to -1 for no timeout");
-module_param(write_timeout, int, 0444);
-MODULE_PARM_DESC(write_timeout, "ms to wait before blocking write() timing out; set to -1 for no timeout");
 
 /* ----------------------------
  *            types
@@ -91,13 +78,6 @@ struct template_driver {
 	void __iomem *base_addr; /* kernel space memory */
 
 	unsigned int template_dts_entry; /* example dts entry */
-
-	wait_queue_head_t read_queue; /* wait queue for asynchronos read */
-	spinlock_t read_queue_lock; /* lock for reading waitqueue */
-	wait_queue_head_t write_queue; /* wait queue for asynchronos write */
-	spinlock_t write_queue_lock; /* lock for writing waitqueue */
-	unsigned int write_flags; /* write file flags */
-	unsigned int read_flags; /* read file flags */
 
     uint32_t fpga_addr;
 	struct device *dt_device; /* device created from the device tree */
@@ -230,32 +210,13 @@ static void reset_ip_core(struct template_driver *template)
 	iowrite32(TEMPLATE_RESET_WORD, template->base_addr + TEMPLATE_STATUS_OFFSET);
 }
 
-static unsigned int template_poll(struct file *file, poll_table *wait)
-{
-	unsigned int mask;
-	struct template_driver *template = (struct template_driver *)file->private_data;
-	unsigned int rdfo;
-	unsigned int tdfv;
-	mask = 0;
-
-	poll_wait(file, &template_read_wait, wait);
-	poll_wait(file, &template_write_wait, wait);
-
-	rdfo = ioread32(template->base_addr + TEMPLATE_STATUS_OFFSET) & TEMPLATE_READ_READY_MASK;
-	mask |= POLLIN | POLLRDNORM;
-
-	tdfv = ioread32(template->base_addr + TEMPLATE_STATUS_OFFSET) & TEMPLATE_WRITE_READY_MASK;
-	mask |= POLLOUT;
-
-	return mask;
-}
-
 static DEFINE_MUTEX(ioctl_lock);
 static long template_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 {
     long rc;
     void *__user arg_ptr;
     uint32_t temp_reg;
+    struct template_kern_regInfo regInfo;
 	struct template_driver *template = (struct template_driver *)f->private_data;
 
     if (mutex_lock_interruptible(&ioctl_lock))
@@ -276,21 +237,26 @@ static long template_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 
     // Perform the specified command
     switch (cmd) {
-        case TEMPLATE_READ_REG_STATUS:
-            temp_reg = ioread32(template->base_addr + TEMPLATE_STATUS_OFFSET);
-            if (copy_to_user(arg_ptr, &temp_reg, sizeof(temp_reg))) {
+        case TEMPLATE_GET_REG:
+            if (copy_from_user(&regInfo, arg_ptr, sizeof(regInfo))) {
+                dev_err(template->dt_device, "unable to copy status reg to userspace\n");
+                return -EFAULT;
+            }
+            regInfo.regVal = ioread32(template->base_addr + regInfo.regNo*4);
+            if (copy_to_user(arg_ptr, &regInfo, sizeof(regInfo))) {
                 dev_err(template->dt_device, "unable to copy status reg to userspace\n");
                 return -EFAULT;
             }
             rc = 0;
             break;
 
-        case TEMPLATE_WRITE_REG_STATUS:
-            if (copy_from_user(&temp_reg, arg_ptr, sizeof(temp_reg))) {
-                dev_err(template->dt_device, "unable to copy temp_struct from userspace\n");
+        case TEMPLATE_SET_REG:
+            if (copy_from_user(&regInfo, arg_ptr, sizeof(regInfo))) {
+                dev_err(template->dt_device, "unable to copy status reg to userspace\n");
                 return -EFAULT;
             }
-			iowrite32(temp_reg, template->base_addr + TEMPLATE_STATUS_OFFSET);
+            iowrite32(regInfo.regVal, template->base_addr + regInfo.regNo*4);
+            rc = 0;
             break;
 
         case TEMPLATE_GET_FPGA_ADDR:
@@ -333,240 +299,6 @@ static long template_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
     return rc;
 }
 
-#ifdef TEMPLATE_INTERRUPT_ENABLE
-static irqreturn_t template_irq(int irq, void *dw)
-{
-	struct template_driver *template = (struct template_driver *)dw;
-    unsigned int pending_interrupts;
-
-    do {
-        pending_interrupts = ioread32(template->base_addr +
-                          TEMPLATE_IER_OFFSET) &
-                          ioread32(template->base_addr
-                          + TEMPLATE_ISR_OFFSET);
-        if (pending_interrupts & TEMPLATE_IRQ_EVENTA_MASK) {
-            /* do something ... lets say read is ready! wakeup poll */
-
-            /* wake the reader process if it is waiting */
-            wake_up(&fifo->read_queue);
-            wake_up_interruptible(&template_read_wait);
-
-            /* clear interrupt */
-            iowrite32(TEMPLATE_IRQ_EVENTA_MASK & IRQ_ALL_MASK,
-                  template->base_addr + TEMPLATE_ISR_OFFSET);
-        }
-    } while (pending_interrupts);
-    return IRQ_HANDLED;
-}
-#endif
-
-/* reads a single packet from the template as dictated by the tlast signal */
-static ssize_t template_read(struct file *f, char __user *buf,
-			      size_t len, loff_t *off)
-{
-	struct template_driver *template = (struct template_driver *)f->private_data;
-	size_t bytes_available;
-	unsigned int words_available;
-        unsigned int leftover;
-	unsigned int copied;
-	unsigned int copy;
-	unsigned int i;
-	int ret;
-	u32 tmp_buf[READ_BUF_SIZE];
-
-	if (template->read_flags & O_NONBLOCK) {
-		/* opened in non-blocking mode
-		 * return if there are no packets available
-		 */
-		if (!(ioread32(template->base_addr + TEMPLATE_STATUS_OFFSET) & TEMPLATE_READ_READY_MASK))
-			return -EAGAIN;
-	} else {
-		/* opened in blocking mode
-		 * wait for a packet available interrupt (or timeout)
-		 * if nothing is currently available
-		 */
-		spin_lock_irq(&template->read_queue_lock);
-		ret = wait_event_interruptible_lock_irq_timeout(
-			template->read_queue,
-			(ioread32(template->base_addr + TEMPLATE_STATUS_OFFSET) & TEMPLATE_READ_READY_MASK),
-			template->read_queue_lock,
-			(read_timeout >= 0) ? msecs_to_jiffies(read_timeout) :
-				MAX_SCHEDULE_TIMEOUT);
-		spin_unlock_irq(&template->read_queue_lock);
-                wake_up_interruptible(&template_read_wait);
-
-		if (ret == 0) {
-			/* timeout occurred */
-			dev_dbg(template->dt_device, "read timeout");
-			return -EAGAIN;
-		} else if (ret == -ERESTARTSYS) {
-			/* signal received */
-			return -ERESTARTSYS;
-		} else if (ret < 0) {
-			dev_err(template->dt_device, "wait_event_interruptible_timeout() error in read (ret=%i)\n",
-				ret);
-			return ret;
-		}
-	}
-
-	bytes_available = ioread32(template->base_addr + TEMPLATE_READ_BYTES_OFFSET);
-	if (!bytes_available) {
-		dev_err(template->dt_device, "received a packet of length 0 - template core will be reset\n");
-		reset_ip_core(template);
-		return -EIO;
-	}
-
-	words_available = bytes_available/4;
-
-	/* read data into an intermediate buffer, copying the contents
-	 * to userspace when the buffer is full
-	 */
-	copied = 0;
-	while (words_available > 0) {
-		copy = min(words_available, READ_BUF_SIZE);
-
-		for (i = 0; i < copy; i++) {
-			tmp_buf[i] = ioread32(template->base_addr +
-					     TEMPLATE_READ_OFFSET);
-		}
-
-		if (copy_to_user(buf + copied * sizeof(u32), tmp_buf,
-				 copy * sizeof(u32))) {
-			reset_ip_core(template);
-			return -EFAULT;
-		}
-
-		copied += copy;
-		words_available -= copy;
-	}
-
-    leftover = bytes_available % sizeof(u32);
-    if (leftover) {
-        tmp_buf[0] = ioread32(template->base_addr +
-                              TEMPLATE_READ_OFFSET);
-
-        if (copy_to_user(buf + copied * sizeof(u32), tmp_buf,
-                     leftover)) {
-            reset_ip_core(template);
-            return -EFAULT;
-        }
-    }
-
-	return bytes_available;
-}
-
-static ssize_t template_write(struct file *f, const char __user *buf,
-			       size_t len, loff_t *off)
-{
-	struct template_driver *template = (struct template_driver *)f->private_data;
-	unsigned int words_to_write;
-	unsigned int copied;
-        unsigned int copiedBytes;
-	unsigned int copy;
-	unsigned int i;
-	int ret;
-	u32 tmp_buf[WRITE_BUF_SIZE];
-        int leftover;
-
-	words_to_write = len / sizeof(u32);
-        leftover = len % sizeof(u32);
-
-	if (template->write_flags & O_NONBLOCK) {
-		/* opened in non-blocking mode
-		 * return if there is not enough room available in the template
-		 */
-		if (words_to_write > (ioread32(template->base_addr +
-					      TEMPLATE_STATUS_OFFSET) & TEMPLATE_WRITE_READY_MASK)) {
-			return -EAGAIN;
-		}
-	} else {
-		/* opened in blocking mode */
-
-		/* wait for an interrupt (or timeout) if there isn't
-		 * currently enough room in the template
-		 */
-		spin_lock_irq(&template->write_queue_lock);
-		ret = wait_event_interruptible_lock_irq_timeout(
-			template->write_queue,
-			(ioread32(template->base_addr + TEMPLATE_STATUS_OFFSET) & TEMPLATE_WRITE_READY_MASK),
-			template->write_queue_lock,
-			(write_timeout >= 0) ? msecs_to_jiffies(write_timeout) :
-				MAX_SCHEDULE_TIMEOUT);
-		spin_unlock_irq(&template->write_queue_lock);
-                wake_up_interruptible(&template_write_wait);
-
-		if (ret == 0) {
-			/* timeout occurred */
-			dev_dbg(template->dt_device, "write timeout\n");
-			return -EAGAIN;
-		} else if (ret == -ERESTARTSYS) {
-			/* signal received */
-			return -ERESTARTSYS;
-		} else if (ret < 0) {
-			/* unknown error */
-			dev_err(template->dt_device,
-				"wait_event_interruptible_timeout() error in write (ret=%i)\n",
-				ret);
-			return ret;
-		}
-	}
-
-	/* write data from an intermediate buffer into the template IP, refilling
-	 * the buffer with userspace data as needed
-	 */
-	copied = 0;
-	while (words_to_write > 0) {
-		copy = min(words_to_write, WRITE_BUF_SIZE);
-
-		if (copy_from_user(tmp_buf, buf + copied * sizeof(u32),
-				   copy * sizeof(u32))) {
-			reset_ip_core(template);
-			return -EFAULT;
-		}
-
-		for (i = 0; i < copy; i++)
-			iowrite32(tmp_buf[i], template->base_addr +
-				  TEMPLATE_WRITE_OFFSET);
-
-		copied += copy;
-		words_to_write -= copy;
-	}
-
-	if (leftover) {	
-                if (copy_from_user(tmp_buf, buf + copied * sizeof(u32),
-                                   leftover)) {
-                        reset_ip_core(template);
-                        return -EFAULT;
-                }
-                iowrite32(tmp_buf[0], template->base_addr +
-                          TEMPLATE_WRITE_OFFSET);
-        }
-
-        /* write packet size to template */
-	copiedBytes = (!!leftover) ? (copied*sizeof(u32)+leftover) : (copied*sizeof(u32));
-
-    return (ssize_t)copiedBytes;
-}
-
-static int template_open(struct inode *inod, struct file *f)
-{
-	struct template_driver *template = (struct template_driver *)container_of(inod->i_cdev,
-					struct template_driver, char_device);
-	f->private_data = template;
-
-	if (((f->f_flags & O_ACCMODE) == O_WRONLY) ||
-	    ((f->f_flags & O_ACCMODE) == O_RDWR)) {
-            template->write_flags = f->f_flags;
-	}
-
-	if (((f->f_flags & O_ACCMODE) == O_RDONLY) ||
-	    ((f->f_flags & O_ACCMODE) == O_RDWR)) {
-            template->read_flags = f->f_flags;
-	}
-
-	return 0;
-}
-
 static int template_close(struct inode *inod, struct file *f)
 {
 	f->private_data = NULL;
@@ -577,10 +309,7 @@ static const struct file_operations fops = {
 	.owner = THIS_MODULE,
 	.open = template_open,
 	.release = template_close,
-	.read = template_read,
-    .unlocked_ioctl = template_ioctl,
-	.write = template_write,
-	.poll = template_poll
+    .unlocked_ioctl = template_ioctl
 };
 
 /* read named property from the device tree */
@@ -603,9 +332,6 @@ static int get_dts_property(struct template_driver *template,
 
 static int template_probe(struct platform_device *pdev)
 {
-#ifdef TEMPLATE_IRQ_ENABLED
-	struct resource *r_irq; /* interrupt resources */
-#endif
 	struct resource *r_mem; /* IO mem resources */
 	struct device *dev = &pdev->dev; /* OS device (from device tree) */
 	struct template_driver *template = NULL;
@@ -700,31 +426,6 @@ static int template_probe(struct platform_device *pdev)
      ****************************************************************************/
 	reset_ip_core(template);
 
-
-	/* ----------------------------
-	 *    init device interrupts
-	 * ----------------------------
-	 */
-#if TEMPLATE_IRQ_ENABLED
-	/* get IRQ resource */
-	r_irq = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
-	if (!r_irq) {
-		dev_err(template->dt_device, "no IRQ found for 0x%pa\n",
-			&template->mem->start);
-		rc = -EIO;
-		goto err_unmap;
-	}
-
-	/* request IRQ */
-	template->irq = r_irq->start;
-	rc = request_irq(template->irq, &template_irq, 0, DRIVER_NAME, template);
-	if (rc) {
-		dev_err(template->dt_device, "couldn't allocate interrupt %i\n",
-			template->irq);
-		goto err_unmap;
-	}
-#endif
-
 	/* ----------------------------
 	 *      init char device
 	 * ----------------------------
@@ -733,7 +434,7 @@ static int template_probe(struct platform_device *pdev)
 	/* allocate device number */
 	rc = alloc_chrdev_region(&template->devt, 0, 1, DRIVER_NAME);
 	if (rc < 0)
-		goto err_irq;
+		goto err_unmap;
 	dev_dbg(template->dt_device, "allocated device number major %i minor %i\n",
 		MAJOR(template->devt), MINOR(template->devt));
 
@@ -783,10 +484,6 @@ err_dev:
 	device_destroy(template_class, template->devt);
 err_chrdev_region:
 	unregister_chrdev_region(template->devt, 1);
-err_irq:
-#ifdef TEMPLATE_IRQ_ENABLED
-	free_irq(template->irq, template);
-#endif
 err_unmap:
 	iounmap(template->base_addr);
 err_mem:
@@ -806,9 +503,6 @@ static int template_remove(struct platform_device *pdev)
 	dev_set_drvdata(template->device, NULL);
 	device_destroy(template_class, template->devt);
 	unregister_chrdev_region(template->devt, 1);
-#ifdef TEMPLATE_IRQ_ENABLED
-	free_irq(template->irq, template);
-#endif
 	iounmap(template->base_addr);
 	release_mem_region(template->mem->start, resource_size(template->mem));
 	dev_set_drvdata(dev, NULL);
@@ -833,8 +527,6 @@ static struct platform_driver template_driver = {
 
 static int __init template_init(void)
 {
-	pr_info(DRIVER_NAME " driver loaded with parameters read_timeout = %i, write_timeout = %i\n",
-		read_timeout, write_timeout);
 	template_class = class_create(THIS_MODULE, DRIVER_NAME);
 	if (IS_ERR(template_class))
 		return PTR_ERR(template_class);

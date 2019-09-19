@@ -34,8 +34,14 @@
 #define TEMPLATE_IOCTL_MAGIC 'Q'
 #define TEMPLATE_NUM_IOCTLS 6
 
-#define TEMPLATE_READ_REG_STATUS  _IOR(TEMPLATE_IOCTL_MAGIC,0, uint32_t)
-#define TEMPLATE_WRITE_REG_STATUS _IOW(TEMPLATE_IOCTL_MAGIC,1,uint32_t)
+
+struct template_kern_regInfo{
+        uint32_t regNo;
+        uint32_t regVal;
+        };
+
+#define TEMPLATE_GET_REG          _IOR(TEMPLATE_IOCTL_MAGIC, 0, struct template_kern_regInfo)
+#define TEMPLATE_SET_REG          _IOW(TEMPLATE_IOCTL_MAGIC, 1, struct template_kern_regInfo)
 #define TEMPLATE_GET_DTS_VAL0     _IOR(TEMPLATE_IOCTL_MAGIC,2, uint32_t)
 #define TEMPLATE_SET_DTS_VAL0     _IOW(TEMPLATE_IOCTL_MAGIC,3,uint32_t)
 #define TEMPLATE_RESET_IP         _IO(TEMPLATE_IOCTL_MAGIC,4)
