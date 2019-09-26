@@ -163,7 +163,7 @@ static ssize_t reset_store(struct device *dev, struct device_attribute *attr,
 {
 	struct template_driver *template = dev_get_drvdata(dev);
     reset_ip_core(template);
-    return 0;
+    return 1; /* return 1 so the "$ echo 1 > reset" command doesn't block */
 }
 static DEVICE_ATTR_WO(reset);
 
