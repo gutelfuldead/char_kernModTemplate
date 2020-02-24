@@ -56,10 +56,10 @@
 #define assn_bit(bitNumber, dataValue, bitValue) ((bitValue) ? set_bit(bitNumber, dataValue) : clear_bit(bitNumber, dataValue))
 #define read_mask(reg, mask, bitOffset, out) (out = (reg >> bitOffset) & mask)
 #define set_mask(reg, reg_mask, bit_offset, write_val, out) do {\
-    out = reg; \
-    out &= ~(reg_mask << bit_offset); \
-    out |= ((write_val & reg_mask) << bit_offset); \
-    } while (0);
+	out = reg; \
+	out &= ~(reg_mask << bit_offset); \
+	out |= ((write_val & reg_mask) << bit_offset); \
+	} while (0);
 
 /* ----------------------------
  *           globals
@@ -95,11 +95,11 @@ static void readModifyWrite(struct template_driver *template, uint32_t regOff, u
 
 static void readModifyWrite(struct template_driver *template, uint32_t regOff, uint32_t value, uint32_t mask, uint32_t bit)
 {
-    unsigned int readVal;
-    unsigned int outVal;
+	unsigned int readVal;
+	unsigned int outVal;
 
-    readVal = 0;
-    outVal  = 0;
+	readVal = 0;
+	outVal  = 0;
 
 	readVal = ioread32(template->base_addr + regOff);
 	smi_set_mask(readVal, mask, bit, value, outVal);
