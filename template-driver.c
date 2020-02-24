@@ -79,7 +79,7 @@ struct template_driver {
 
 	unsigned int template_dts_entry; /* example dts entry */
 
-    uint32_t fpga_addr;
+	uint32_t fpga_addr;
 	struct device *dt_device; /* device created from the device tree */
 	struct device *device; /* device associated with char_device */
 	dev_t devt; /* our char device number */
