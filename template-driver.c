@@ -102,7 +102,7 @@ static void readModifyWrite(struct template_driver *template, uint32_t regOff, u
     outVal  = 0;
 
 	readVal = ioread32(template->base_addr + regOff);
-    smi_set_mask(readVal, mask, bit, value, outVal);
+	smi_set_mask(readVal, mask, bit, value, outVal);
 	iowrite32(outVal, template->base_addr + regOff);
 }
 
@@ -123,7 +123,7 @@ static ssize_t sysfs_write(struct device *dev, const char *buf,
 	if (rc < 0)
 		return rc;
 
-    readModifyWrite(template, addr_offset, tmp, mask, bitOff);
+	readModifyWrite(template, addr_offset, tmp, mask, bitOff);
 
 	return count;
 }
@@ -134,11 +134,11 @@ static ssize_t sysfs_read(struct device *dev, char *buf,
 	struct template_driver *template = dev_get_drvdata(dev);
 	unsigned int read_val;
 	unsigned int len;
-    unsigned int outVal;
+	unsigned int outVal;
 	char tmp[32];
 
 	read_val = ioread32(template->base_addr + addr_offset);
-    read_mask(read_val, mask, bitOff, outVal);
+	read_mask(read_val, mask, bitOff, outVal);
 	len =  snprintf(tmp, sizeof(tmp), "0x%x\n", outVal);
 	memcpy(buf, tmp, len);
 
@@ -149,12 +149,12 @@ static ssize_t fpga_addr_show(struct device *dev,
 			struct device_attribute *attr, char *buf)
 {
 	struct template_driver *template = dev_get_drvdata(dev);
-    char tmp[32];
-    unsigned int len;
+	char tmp[32];
+	unsigned int len;
 
-    len = snprintf(tmp, sizeof(tmp),"0x%x\n", template->fpga_addr);
-    memcpy(buf, tmp, len);
-    return len;
+	len = snprintf(tmp, sizeof(tmp),"0x%x\n", template->fpga_addr);
+	memcpy(buf, tmp, len);
+	return len;
 }
 static DEVICE_ATTR_RO(fpga_addr);
 
@@ -162,8 +162,8 @@ static ssize_t reset_store(struct device *dev, struct device_attribute *attr,
 			 const char *buf, size_t count)
 {
 	struct template_driver *template = dev_get_drvdata(dev);
-    reset_ip_core(template);
-    return 1; /* return 1 so the "$ echo 1 > reset" command doesn't block */
+	reset_ip_core(template);
+	return 1; /* return 1 so the "$ echo 1 > reset" command doesn't block */
 }
 static DEVICE_ATTR_WO(reset);
 
@@ -213,90 +213,90 @@ static void reset_ip_core(struct template_driver *template)
 static DEFINE_MUTEX(ioctl_lock);
 static long template_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
 {
-    long rc;
-    void *__user arg_ptr;
-    uint32_t temp_reg;
-    struct template_kern_regInfo regInfo;
+	long rc;
+	void *__user arg_ptr;
+	uint32_t temp_reg;
+	struct template_kern_regInfo regInfo;
 	struct template_driver *template = (struct template_driver *)f->private_data;
 
-    if (mutex_lock_interruptible(&ioctl_lock))
-        return -EINTR;
+	if (mutex_lock_interruptible(&ioctl_lock))
+		return -EINTR;
 
-    // Coerce the arguement as a userspace pointer
-    arg_ptr = (void __user *)arg;
-    temp_reg = 0;
+	// Coerce the arguement as a userspace pointer
+	arg_ptr = (void __user *)arg;
+	temp_reg = 0;
 
-    // Verify that this IOCTL is intended for our device, and is in range
-    if (_IOC_TYPE(cmd) != TEMPLATE_IOCTL_MAGIC) {
-        dev_err(template->dt_device, "IOCTL command magic number does not match.\n");
-        return -ENOTTY;
-    } else if (_IOC_NR(cmd) >= TEMPLATE_NUM_IOCTLS) {
-        dev_err(template->dt_device, "IOCTL command is out of range for this device.\n");
-        return -ENOTTY;
-    }
+	// Verify that this IOCTL is intended for our device, and is in range
+	if (_IOC_TYPE(cmd) != TEMPLATE_IOCTL_MAGIC) {
+		dev_err(template->dt_device, "IOCTL command magic number does not match.\n");
+		return -ENOTTY;
+	} else if (_IOC_NR(cmd) >= TEMPLATE_NUM_IOCTLS) {
+		dev_err(template->dt_device, "IOCTL command is out of range for this device.\n");
+		return -ENOTTY;
+	}
 
-    // Perform the specified command
-    switch (cmd) {
-        case TEMPLATE_GET_REG:
-            if (copy_from_user(&regInfo, arg_ptr, sizeof(regInfo))) {
-                dev_err(template->dt_device, "unable to copy status reg to userspace\n");
-                return -EFAULT;
-            }
-            regInfo.regVal = ioread32(template->base_addr + regInfo.regNo*4);
-            if (copy_to_user(arg_ptr, &regInfo, sizeof(regInfo))) {
-                dev_err(template->dt_device, "unable to copy status reg to userspace\n");
-                return -EFAULT;
-            }
-            rc = 0;
-            break;
+	// Perform the specified command
+	switch (cmd) {
+	case TEMPLATE_GET_REG:
+		if (copy_from_user(&regInfo, arg_ptr, sizeof(regInfo))) {
+			dev_err(template->dt_device, "unable to copy status reg to userspace\n");
+			return -EFAULT;
+		}
+		regInfo.regVal = ioread32(template->base_addr + regInfo.regNo*4);
+		if (copy_to_user(arg_ptr, &regInfo, sizeof(regInfo))) {
+			dev_err(template->dt_device, "unable to copy status reg to userspace\n");
+			return -EFAULT;
+		}
+		rc = 0;
+		break;
 
         case TEMPLATE_SET_REG:
-            if (copy_from_user(&regInfo, arg_ptr, sizeof(regInfo))) {
-                dev_err(template->dt_device, "unable to copy status reg to userspace\n");
-                return -EFAULT;
-            }
-            iowrite32(regInfo.regVal, template->base_addr + regInfo.regNo*4);
-            rc = 0;
-            break;
+		if (copy_from_user(&regInfo, arg_ptr, sizeof(regInfo))) {
+			dev_err(template->dt_device, "unable to copy status reg to userspace\n");
+			return -EFAULT;
+		}
+		iowrite32(regInfo.regVal, template->base_addr + regInfo.regNo*4);
+		rc = 0;
+		break;
 
         case TEMPLATE_GET_FPGA_ADDR:
-            temp_reg = template->fpga_addr;
-            if (copy_to_user(arg_ptr, &temp_reg, sizeof(temp_reg))) {
-                dev_err(template->dt_device, "unable to copy status reg to userspace\n");
-                return -EFAULT;
-            }
-            rc = 0;
-            break;
+		temp_reg = template->fpga_addr;
+		if (copy_to_user(arg_ptr, &temp_reg, sizeof(temp_reg))) {
+			dev_err(template->dt_device, "unable to copy status reg to userspace\n");
+			return -EFAULT;
+		}
+		rc = 0;
+		break;
 
-        case TEMPLATE_RESET_IP:
-            reset_ip_core(template);
-            break;
+	case TEMPLATE_RESET_IP:
+		reset_ip_core(template);
+		break;
 
         case TEMPLATE_GET_DTS_VAL0:
-            temp_reg = ioread32(template->base_addr + TEMPLATE_DTS_ENTRY_OFFSET);
-            smi_read_mask(temp_reg, TEMPLATE_DTS_VAL0_MASK, TEMPLATE_DTS_VAL0_BIT, temp_reg_out);
-            if (copy_to_user(arg_ptr, &temp_reg_out, sizeof(temp_reg_out))) {
-                dev_err(template->dt_device, "unable to copy status reg to userspace\n");
-                return -EFAULT;
-            }
-            rc = 0;
-            break;
+		temp_reg = ioread32(template->base_addr + TEMPLATE_DTS_ENTRY_OFFSET);
+		smi_read_mask(temp_reg, TEMPLATE_DTS_VAL0_MASK, TEMPLATE_DTS_VAL0_BIT, temp_reg_out);
+		if (copy_to_user(arg_ptr, &temp_reg_out, sizeof(temp_reg_out))) {
+			dev_err(template->dt_device, "unable to copy status reg to userspace\n");
+			return -EFAULT;
+		}
+		rc = 0;
+		break;
 
         case TEMPLATE_SET_DTS_VAL0:
-            if (copy_from_user(&temp_reg, arg_ptr, sizeof(temp_reg))) {
-                dev_err(template->dt_device, "unable to copy status reg to userspace\n");
-                return -EFAULT;
-            }
-            readModifyWrite(template, TEMPLATE_DTS_ENTRY_OFFSET, temp_reg, TEMPLATE_DTS_VAL0_MASK, TEMPLATE_DTS_VAL0_BIT);
-            rc = 0;
-            break;
+		if (copy_from_user(&temp_reg, arg_ptr, sizeof(temp_reg))) {
+			dev_err(template->dt_device, "unable to copy status reg to userspace\n");
+			return -EFAULT;
+		}
+		readModifyWrite(template, TEMPLATE_DTS_ENTRY_OFFSET, temp_reg, TEMPLATE_DTS_VAL0_MASK, TEMPLATE_DTS_VAL0_BIT);
+		rc = 0;
+		break;
 
-        default:
-            return -ENOTTY;
-    }
-    
-    mutex_unlock(&ioctl_lock);
-    return rc;
+	default:
+		return -ENOTTY;
+	}
+
+	mutex_unlock(&ioctl_lock);
+	return rc;
 }
 
 static int template_close(struct inode *inod, struct file *f)
@@ -309,7 +309,7 @@ static const struct file_operations fops = {
 	.owner = THIS_MODULE,
 	.open = template_open,
 	.release = template_close,
-    .unlocked_ioctl = template_ioctl
+	.unlocked_ioctl = template_ioctl
 };
 
 /* read named property from the device tree */
@@ -387,7 +387,7 @@ static int template_probe(struct platform_device *pdev)
 	}
 	dev_dbg(template->dt_device, "got memory location [0x%pa - 0x%pa]\n",
 		&template->mem->start, &template->mem->end);
-    template->fpga_addr = template->mem->start;
+	template->fpga_addr = template->mem->start;
 
 	/* map physical memory to kernel virtual address space */
 	template->base_addr = ioremap(template->mem->start, resource_size(template->mem));
@@ -402,9 +402,9 @@ static int template_probe(struct platform_device *pdev)
 	 *          init IP
 	 * ----------------------------
 	 */
-    /*****************************************************************************
-     * MODIFY START
-     ****************************************************************************/
+	/*****************************************************************************
+	* MODIFY START
+	****************************************************************************/
 	/* retrieve device tree properties */
 	rc = get_dts_property(template, "usr,template-dts-entry",
 			      &temp);
@@ -421,9 +421,9 @@ static int template_probe(struct platform_device *pdev)
 	}
 	template->template_dts_entry = temp;
 
-    /*****************************************************************************
-     * MODIFY END
-     ****************************************************************************/
+	/*****************************************************************************
+	* MODIFY END
+	****************************************************************************/
 	reset_ip_core(template);
 
 	/* ----------------------------
